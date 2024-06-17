@@ -1,0 +1,250 @@
+---
+title: "Predictive Modeling Final Project"
+author: "Moneeb Abu-Esba, Omar Diaz, and Luke Lopez"
+date: "2024-05-10"
+output: html_document
+---
+```{r}
+library(ISLR)
+library(tidyverse)
+library(MASS)
+library(DescTools)
+library(ResourceSelection)
+library(caret)
+library(naivebayes)
+library(e1071)
+library(dplyr)
+library(rmarkdown)
+```
+
+```{r}
+
+fundraise = read.csv("fundraising.csv")
+future= read.csv("future_fundraising.csv")
+```
+
+
+```{r}
+str(future)
+```
+
+```{r}
+str(fundraise)
+```
+
+```{r}
+# Check for missing values
+sum(is.na(fundraise))
+
+# Remove rows with missing values
+fundraise <- na.omit(fundraise)
+
+# Convert categorical variables into factors
+categorical_cols <- c('zipconvert2', 'zipconvert3', 'zipconvert4', 'zipconvert5', 'homeowner', 'female')
+fundraise[categorical_cols] <- lapply(fundraise[categorical_cols], as.factor)
+#target to factor:
+fundraise$target <- as.factor(fundraise$target)
+str(fundraise)
+```
+Step 1: Partitioning: 
+Splitting the dataset into training and testing
+```{r}
+set.seed(123)
+train_index <- createDataPartition(fundraise$target, p = 0.8, list = FALSE)
+train_data <- fundraise[train_index, ]
+test_data <- fundraise[-train_index, ]
+```
+Step 2: Model Building: Random Forest, Logistic Regression, KNN, and Naive-Bayes
+(A.)Exploratory Data Analysis: Checking for Correlation:
+
+```{r}
+temp = fundraise[, c(6,7,9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20)]
+correlation = cor(temp)
+round(correlation, 5)
+```
+
+(B.)Classification Tools and Parameters:
+```{r}
+### Train logistic regression model
+logit_mod <- glm(target~ ., data = train_data, family = binomial)
+summary(logit_mod)
+```
+
+```{r}
+#Log Reg Final GLM Steps and Accuracy:
+logit_step = step(logit_mod, scope = list(upper = logit_mod),
+                direction = "both", test = "Chisq", trace = F)
+
+summary(logit_step)
+```
+```{r}
+hoslem.test(logit_step$y, fitted(logit_step), g=10)
+```
+
+
+```{r}
+#Logistic Regression Final GLM Steps and Accuracy:
+logit_final = glm(target ~ num_child + income + months_since_donate + avg_gift, data = train_data, family = 'binomial')
+summary(logit_final)
+```
+```{r}
+logit_prob = predict.glm(logit_final, newdata = test_data, type = 'response')
+logit_pred = ifelse(logit_prob > .5, 'Donor', 'No Donor')
+confusionMatrix(as.factor(logit_pred), test_data$target, positive = 'Donor')
+```
+
+
+
+
+```{r}
+train_control = trainControl(method="repeatedcv",number=10,repeats=3)
+```
+
+```{r}
+#Random Forest Model:
+rf = train(target~.,
+               data = train_data,
+               method ='rf',
+               trControl = train_control,
+               importance = TRUE)
+```
+
+```{r}
+rf$besttune
+```
+
+```{r}
+varImp(rf)
+```
+
+```{r}
+plot(varImp(rf))
+```
+
+
+Including variables that were significant from Logit Model: num_child, income, avg_gift, and months_since_donate.
+
+```{r}
+#Random Forest Model Refitted:
+rf_refitted = train(target~ num_child + income + avg_gift +months_since_donate ,
+                        data = train_data,
+                        method ='rf',
+                        trControl = train_control,
+                        importance = TRUE)
+```
+
+
+
+
+
+```{r}
+rf_pred_refit = predict(rf_refitted,test_data)
+```
+
+
+```{r}
+confusionMatrix(rf_pred_refit,test_data$target)
+```
+
+```{r}
+# Naive Bayes Model:
+naive_model <- naiveBayes(target ~ ., data = train_data)
+```
+
+
+Including variables that were significant from Logit Model: num_child, income, avg_gift, and months_since_donate.
+```{r}
+#Naive Bayes important variables(Using same variables as in RF and Logit Model):
+naive_model<- naiveBayes(target ~ num_child + income + months_since_donate + avg_gift, data = train_data)
+```
+
+
+```{r}
+
+# Evaluation with important variables:
+predictions <- predict(naive_model, newdata = test_data)
+confusion_matrix <- table(predictions, test_data$target)
+accuracy <- sum(diag(confusion_matrix)) / sum(confusion_matrix)
+accuracy
+```
+
+```{r}
+### KNN Model: Used variables that we thought were significant predictors:
+train_ctrl = trainControl(method="repeatedcv", number=10,repeats=3)
+
+knn_mod = train(target~ num_child + income + months_since_donate + avg_gift + homeowner + female + lifetime_gifts,
+                data=train_data,
+                method='knn',
+                trControl = train_ctrl,
+                tuneLength=20)
+
+knn_pred = predict(knn_mod, test_data)
+
+confusionMatrix(as.factor(knn_pred), test_data$target, positive = 'Donor')
+```
+
+
+(C.) Classification under asymmetric response and cost. Comment on the reasoning behind using weighted sampling to produce a training set with equal numbers of donors and non-donors? 
+Why not use a simple random sample from the original dataset?
+Answer: Reword this: A weighted sample is utilized in producing a training set for the model that contains equal numbers of donors and non-donors to adjust for potential imbalance in the data. If the response is not balanced, the model may be biased towards the class that is dominant which can cause poor test performance. A simple random sample is not enough to compensate for this imbalance; rather, it will preserve the imbalance.
+
+(D.)Evaluate the Fit:
+```{r}
+models <- c('Random Forest', 'Logistic Regression', 'KNN', "Naive-Bayes")
+acc <- c(49.58, 44.74, 52.75, 49.9)
+acc.summary <- data.frame(models, acc)
+rownames(acc.summary) <- models
+acc.summary
+```
+
+```{r}
+# Plot the bar chart 
+barplot(acc,names.arg = models, ylab="Accuracy Score", col="blue",
+        main="Model Results", border="white")
+```
+
+(E). Select Best Model:
+It looks like KNN has highest accuracy at 52.75%.
+
+Step 3: Testing: Use the 'future_fundraising.csv'
+Using your “best” model from Step 2 (number 4), which of these candidates do you predict as donors and non-donors? Use your best model and predict whether the candidate will be a donor or not. Upload your prediction to the leaderboard and comment on the result.
+
+
+
+(A.) Our Best Model:
+
+KNN: 52.25%
+```{r}
+# KNN Best model
+knn_ctrl = trainControl(method="repeatedcv", number=10,repeats=3)
+
+knn_best = train(target~ num_child + income + months_since_donate + avg_gift + homeowner + female + lifetime_gifts ,
+                data=fundraise,
+                method='knn',
+                trControl = knn_ctrl,
+                tuneLength=20)
+
+knn_pred_best = predict(knn_best, future)
+```
+
+```{r}
+# KNN Best Model
+knn_pred_best
+```
+
+
+```{r}
+#KNN Best Model
+write.table(knn_pred_best, file = "knn_best.csv", col.names = c("value"), row.names = FALSE)
+```
+
+0.5416667. This is the score that we received from the leaderboard after uploading our best KNN model with these variables: target~ num_child + income + months_since_donate + avg_gift + homeowner + female + lifetime_gifts. This model performed as expected, as it had a similar accuracy score as we receieved in our initial KNN model.
+
+
+```{r}
+#Extracting the code for the Appendix:
+rmarkdown::render("Predictive_Modeling_Competition.Rmd", output_format = "word_document")
+```
+
+
+
